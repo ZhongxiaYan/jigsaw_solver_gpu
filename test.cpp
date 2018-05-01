@@ -1,5 +1,3 @@
-#include <opencv2/opencv.hpp>
-
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -11,10 +9,14 @@
 #include <tuple>
 #include <utility>
 
+#include <opencv2/opencv.hpp>
+
+// TODO: benchmark
+
 using namespace std;
 using namespace cv;
 
-const int BLOCK_SIZE = 64;
+const int BLOCK_SIZE = 32;
 int NUM_PIECES, PUZZLE_HEIGHT, PUZZLE_WIDTH;
 
 random_device rd;
@@ -71,7 +73,7 @@ float dissimilarity(const Mat_<int>& puzzle, const Point& puzzle_start,
             int p = puzzle(pt);
             int p_r = puzzle(pt + delta[RIGHT]);
             int p_d = puzzle(pt + delta[DOWN]);
-            assert(p > 0 && p_r > 0 && p_d > 0);
+            assert(p && p_r && p_d);
             result += right_dissimilarity(p, p_r) + down_dissimilarity(p, p_d);
         }
     }
@@ -141,7 +143,8 @@ void get_solution(Mat_<int>& result) {
 void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& child, Point& child_start,
                const Point& parent1_start, const Point& parent2_start,
                const Mat_<float>& right_dissimilarity, const Mat_<float>& down_dissimilarity) {
-    const int MUTATION_RATE = 5;
+    constexpr int MUTATION_RATE = 1;
+    constexpr int MUTATION_RATE_MAX = 1000;
     int x, y;
     child = Mat_<int>::zeros(2 * PUZZLE_HEIGHT + 1, 2 * PUZZLE_WIDTH + 1);
     Point* parent1_loc = new Point[NUM_PIECES + 1];
@@ -174,6 +177,15 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     shuffle(remaining_boundaries.begin(), remaining_boundaries.end(), rng);
 
     vector<pair<int, Point>> bb_candidates;
+
+    // TODO: extremely inefficient if nearly all pieces placed
+    auto get_random_unplaced = [&]() {
+        int p;
+        do {
+            p = randint(1, NUM_PIECES);
+        } while (placed[p]);
+        return p;
+    };
 
     auto add_piece = [&](int p, const Point& to) {
         assert(p > 0 && p <= NUM_PIECES);
@@ -239,8 +251,8 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
             int p1 = parent1(to_p1);
             int p2 = parent2(to_p2);
             if (p1 && p1 == p2 && !placed[p1]) {
-                if (randint(0, 99) < MUTATION_RATE) {
-                    // TODO
+                if (remaining_count > 1 && randint(0, MUTATION_RATE_MAX - 1) < MUTATION_RATE) {
+                    p1 = get_random_unplaced();
                 }
                 add_piece(p1, to);
                 do_continue = true;
@@ -284,13 +296,12 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
         } else if (d == UP) {
             p_new = argmin(down_dissimilarity.col(p), placed);
         }
-        if (randint(0, 99) < MUTATION_RATE) {
-            // TODO
+        if (remaining_count > 1 && randint(0, MUTATION_RATE_MAX - 1) < MUTATION_RATE) {
+            p_new = get_random_unplaced();
         }
         add_piece(p_new, to);
     }
-    child_start.x = min_x;
-    child_start.y = min_y;
+    child_start = Point(min_x, min_y);
     delete[] parent1_loc;
     delete[] parent2_loc;
     delete[] child_loc;
@@ -302,12 +313,18 @@ void reassemble(const Mat_<int>& puzzle, const Point& puzzle_start,
     for (int y = 0; y < PUZZLE_HEIGHT; y++) {
         for (int x = 0; x < PUZZLE_WIDTH; x++) {
             int p = puzzle(Point(x, y) + puzzle_start);
+            // if (!p) {
+            //     cout << puzzle_start << endl;
+            //     cout << Point(x, y) << endl;
+            //     cout << format(puzzle, Formatter::FMT_PYTHON) << endl;
+            // }
+            assert(p);
             pieces[p].copyTo(result(Rect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)));
         }
     }
 }
 
-void read_img(const char* path, Mat& result) {
+void read_img(const string& path, Mat& result) {
     Mat img_bgr_u8 = imread(path);
     if (img_bgr_u8.empty()) {
         cerr << "unable to read input file" << endl;
@@ -325,7 +342,7 @@ void read_img(const char* path, Mat& result) {
     cropped.copyTo(result);
 }
 
-void write_img(const char* path, const Mat& img) {
+void write_img(const string& path, const Mat& img) {
     Mat img_bgr_f, img_bgr_u8;
     cvtColor(img, img_bgr_f, COLOR_Lab2BGR);
     img_bgr_f.convertTo(img_bgr_u8, CV_8UC3, 255);
@@ -344,9 +361,6 @@ int main(int argc, char* argv[]) {
     NUM_PIECES = PUZZLE_HEIGHT * PUZZLE_WIDTH;
     assert(PUZZLE_HEIGHT > 1 && PUZZLE_WIDTH > 1);
     cout << NUM_PIECES << " pieces" << endl;
-
-    Mat_<int> solution;
-    get_solution(solution);
 
     // 1-indexed
     Mat* pieces = new Mat[NUM_PIECES + 1];
@@ -403,25 +417,56 @@ int main(int argc, char* argv[]) {
 
     const int POPULATION_SIZE = 1000;
     const int GENERATIONS = 100;
+    const int NUM_ELITE = 4;
 
-    cout << "doing crossover" << endl;
-    Mat_<int> p1, p2, child;
+    Mat_<int> parent;
+    Mat_<int> child;
     Point child_start;
-    get_random_parent(p1);
-    get_random_parent(p2);
-    crossover(p1, p2, child, child_start,
-              Point(1, 1), Point(1, 1),
-              right_dissimilarity, down_dissimilarity);
-    // cout << format(child, Formatter::FMT_PYTHON) << endl;
-    Mat result;
-    reassemble(child, child_start, pieces, result);
+    Mat assembled_result;
 
-    cout << "result loss: " << dissimilarity(child, child_start, right_dissimilarity, down_dissimilarity) << endl;
-    cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
-    if (result.size() != img.size()) {
-        cout << "output size is different! this is bad, but continuing" << endl;
+    cout << "creating initial population" << endl;
+    vector<tuple<Mat_<int>, Point, float>> population;
+    vector<tuple<Mat_<int>, Point, float>> new_population;
+    auto cmp = [](const auto& a, const auto& b) {
+        return get<2>(a) < get<2>(b);
+    };
+
+    for (i = 0; i < POPULATION_SIZE; i++) {
+        get_random_parent(parent);
+        population.push_back(make_tuple(parent.clone(), Point(1, 1),
+                             dissimilarity(parent, Point(1, 1), right_dissimilarity, down_dissimilarity)));
     }
-    write_img("out.png", result);
+
+    Mat_<int> solution;
+    get_solution(solution);
+    cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
+
+    for (i = 1; i <= GENERATIONS; i++) {
+        cout << "generation " << i << endl;
+        nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
+        new_population.assign(population.begin(), population.begin() + NUM_ELITE);
+        while (new_population.size() < POPULATION_SIZE) {
+            int idx1 = randint(0, population.size() - 1);
+            int idx2;
+            do {
+                idx2 = randint(0, population.size() - 1);
+            } while (idx1 == idx2);
+            const auto& pop1 = population[idx1];
+            const auto& pop2 = population[idx2];
+            crossover(get<0>(pop1), get<0>(pop2), child, child_start,
+                      get<1>(pop1), get<1>(pop2),
+                      right_dissimilarity, down_dissimilarity);
+            new_population.push_back(make_tuple(child.clone(), child_start,
+                                     dissimilarity(child, child_start, right_dissimilarity, down_dissimilarity)));
+        }
+        population = move(new_population);
+        // using tie(child, child_start, ...) leads to weird bugs here
+        const auto& best = *min_element(population.begin(), population.end(), cmp);
+        cout << "best loss: " << get<2>(best) << endl;
+        reassemble(get<0>(best), get<1>(best), pieces, assembled_result);
+        // cout << format(child, Formatter::FMT_PYTHON) << endl;
+        write_img("out" + to_string(i) + ".png", assembled_result);
+    }
     // don't bother freeing stuff allocated in main
     return 0;
 }
