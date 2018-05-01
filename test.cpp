@@ -16,7 +16,7 @@
 using namespace std;
 using namespace cv;
 
-const int BLOCK_SIZE = 32;
+constexpr int BLOCK_SIZE = 32;
 int NUM_PIECES, PUZZLE_HEIGHT, PUZZLE_WIDTH;
 
 random_device rd;
@@ -415,9 +415,9 @@ int main(int argc, char* argv[]) {
     bb_by_dir[LEFT] = bb_left;
     bb_by_dir[UP] = bb_up;
 
-    const int POPULATION_SIZE = 1000;
-    const int GENERATIONS = 100;
-    const int NUM_ELITE = 4;
+    constexpr int POPULATION_SIZE = 1000;
+    constexpr int GENERATIONS = 100;
+    constexpr int NUM_ELITE = 4;
 
     Mat_<int> parent;
     Mat_<int> child;
@@ -445,20 +445,26 @@ int main(int argc, char* argv[]) {
         cout << "generation " << i << endl;
         nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
         new_population.assign(population.begin(), population.begin() + NUM_ELITE);
-        while (new_population.size() < POPULATION_SIZE) {
-            int idx1 = randint(0, population.size() - 1);
+        constexpr int to_add = POPULATION_SIZE - NUM_ELITE;
+        #pragma omp parallel for private(child, child_start)
+        for (j = 0; j < to_add; j++) {
+            int idx1 = randint(0, POPULATION_SIZE - 1);
             int idx2;
             do {
-                idx2 = randint(0, population.size() - 1);
+                idx2 = randint(0, POPULATION_SIZE - 1);
             } while (idx1 == idx2);
             const auto& pop1 = population[idx1];
             const auto& pop2 = population[idx2];
             crossover(get<0>(pop1), get<0>(pop2), child, child_start,
                       get<1>(pop1), get<1>(pop2),
                       right_dissimilarity, down_dissimilarity);
-            new_population.push_back(make_tuple(child.clone(), child_start,
-                                     dissimilarity(child, child_start, right_dissimilarity, down_dissimilarity)));
+            #pragma omp critical
+            {
+                new_population.push_back(make_tuple(child.clone(), child_start,
+                                         dissimilarity(child, child_start, right_dissimilarity, down_dissimilarity)));
+            }
         }
+        assert(new_population.size() == POPULATION_SIZE);
         population = move(new_population);
         // using tie(child, child_start, ...) leads to weird bugs here
         const auto& best = *min_element(population.begin(), population.end(), cmp);
