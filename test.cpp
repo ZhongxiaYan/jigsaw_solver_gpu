@@ -8,6 +8,7 @@
 #include <chrono>
 #include <tuple>
 #include <utility>
+#include <omp.h>
 
 #include <opencv2/opencv.hpp>
 
@@ -350,8 +351,10 @@ void write_img(const string& path, const Mat& img) {
 }
 
 int main(int argc, char* argv[]) {
+    auto start = chrono::steady_clock::now();
     int i, j, x, y;
     const char* infile = argc > 1 ? argv[1] : "images/pillars.jpg";
+    const int num_threads = argc > 2 ? std::stoi(argv[2]) : 1;
     Mat img;
     read_img(infile, img);
     cout << "input size (cropped): " << img.size() << endl;
@@ -415,7 +418,11 @@ int main(int argc, char* argv[]) {
     bb_by_dir[LEFT] = bb_left;
     bb_by_dir[UP] = bb_up;
 
+#ifndef DEMO
     constexpr int POPULATION_SIZE = 1000;
+#else
+    constexpr int POPULATION_SIZE = 100;
+#endif
     constexpr int GENERATIONS = 100;
     constexpr int NUM_ELITE = 4;
 
@@ -440,9 +447,12 @@ int main(int argc, char* argv[]) {
     Mat_<int> solution;
     get_solution(solution);
     cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
+    cout << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
 
+    omp_set_num_threads(num_threads);
+    start = chrono::steady_clock::now();
     for (i = 1; i <= GENERATIONS; i++) {
-        cout << "generation " << i << endl;
+        cout << "generation " << i << " time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
         nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
         new_population.assign(population.begin(), population.begin() + NUM_ELITE);
         constexpr int to_add = POPULATION_SIZE - NUM_ELITE;

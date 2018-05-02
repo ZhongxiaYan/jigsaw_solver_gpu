@@ -1,0 +1,28 @@
+input size (cropped): [2048 x 1536]
+3072 pieces
+precomputing pairwise dissimilarities
+precomputing best buddies
+creating initial population
+solution loss: 69857.4
+initialization time: 39956.6 ms
+generation 1 time=4.1e-05 ms
+best loss: 231881
+generation 2 time=154326 ms
+best loss: 210374
+generation 3 time=304055 ms
+best loss: 187183
+generation 4 time=472050 ms
+best loss: 170592
+generation 5 time=653545 ms
+best loss: 160956
+generation 6 time=842320 ms
+best loss: 153779
+generation 7 time=1.03174e+06 ms
+best loss: 149215
+generation 8 time=1.21948e+06 ms
+best loss: 144056
+generation 9 time=1.40695e+06 ms
+best loss: 140492
+generation 10 time=1.59621e+06 ms
+best loss: 130401
+generation 11 time=1.78572e+06 ms
