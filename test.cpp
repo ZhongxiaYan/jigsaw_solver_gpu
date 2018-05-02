@@ -120,7 +120,7 @@ void get_random_parent(Mat_<int>& result) {
         arr[i] = i + 1;
     }
     i = 0;
-    shuffle(&arr[0], &arr[NUM_PIECES], rng);
+    shuffle(arr, arr + NUM_PIECES, rng);
     for (int y = 1; y <= PUZZLE_HEIGHT; y++) {
         for (int x = 1; x <= PUZZLE_WIDTH; x++) {
             result(y, x) = arr[i++];
@@ -152,6 +152,7 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     Point* parent2_loc = new Point[NUM_PIECES + 1];
     Point* child_loc = new Point[NUM_PIECES + 1];
     bool* placed = new bool[NUM_PIECES + 1]();  // inits to false
+    int* tmp = new int[NUM_PIECES];
     for (y = 0; y < PUZZLE_HEIGHT; y++) {
         for (x = 0; x < PUZZLE_WIDTH; x++) {
             auto a = Point(x, y) + parent1_start;
@@ -171,21 +172,27 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     child_loc[initial_piece] = Point(PUZZLE_WIDTH, PUZZLE_HEIGHT);
 
     vector<boundary> remaining_boundaries;
-    remaining_boundaries.push_back(boundary(initial_piece, RIGHT));
-    remaining_boundaries.push_back(boundary(initial_piece, DOWN));
-    remaining_boundaries.push_back(boundary(initial_piece, LEFT));
-    remaining_boundaries.push_back(boundary(initial_piece, UP));
-    shuffle(remaining_boundaries.begin(), remaining_boundaries.end(), rng);
-
     vector<pair<int, Point>> bb_candidates;
 
-    // TODO: extremely inefficient if nearly all pieces placed
     auto get_random_unplaced = [&]() {
-        int p;
-        do {
-            p = randint(1, NUM_PIECES);
-        } while (placed[p]);
-        return p;
+        int len = 0;
+        for (int i = 1; i <= NUM_PIECES; i++) {
+            if (!placed[i]) {
+                tmp[len++] = i;
+            }
+        }
+        assert(len == remaining_count);
+        return tmp[randint(0, len - 1)];
+    };
+
+    auto append_and_shuffle = [&](const boundary& b) {
+        size_t i = randint(0, remaining_boundaries.size());
+        if (i == remaining_boundaries.size()) {
+            remaining_boundaries.push_back(b);
+        } else {
+            remaining_boundaries.push_back(remaining_boundaries[i]);
+            remaining_boundaries[i] = b;
+        }
     };
 
     auto add_piece = [&](int p, const Point& to) {
@@ -202,40 +209,40 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
         assert(max_y - min_y < PUZZLE_HEIGHT);
         maxed_width = maxed_width || (max_x - min_x == PUZZLE_WIDTH - 1);
         maxed_height = maxed_height || (max_y - min_y == PUZZLE_HEIGHT - 1);
-        auto start_size = remaining_boundaries.size();
         if (!maxed_width) {
-            remaining_boundaries.push_back(boundary(p, LEFT));
-            remaining_boundaries.push_back(boundary(p, RIGHT));
+            append_and_shuffle(boundary(p, LEFT));
+            append_and_shuffle(boundary(p, RIGHT));
         } else {
             if (to.x > min_x) {
-                remaining_boundaries.push_back(boundary(p, LEFT));
+                append_and_shuffle(boundary(p, LEFT));
             }
             if (to.x < max_x) {
-                remaining_boundaries.push_back(boundary(p, RIGHT));
+                append_and_shuffle(boundary(p, RIGHT));
             }
         }
         if (!maxed_height) {
-            remaining_boundaries.push_back(boundary(p, UP));
-            remaining_boundaries.push_back(boundary(p, DOWN));
+            append_and_shuffle(boundary(p, UP));
+            append_and_shuffle(boundary(p, DOWN));
         } else {
             if (to.y > min_y) {
-                remaining_boundaries.push_back(boundary(p, UP));
+                append_and_shuffle(boundary(p, UP));
             }
             if (to.y < max_y) {
-                remaining_boundaries.push_back(boundary(p, DOWN));
+                append_and_shuffle(boundary(p, DOWN));
             }
-        }
-        if (remaining_boundaries.size() != start_size) {
-            shuffle(remaining_boundaries.begin(), remaining_boundaries.end(), rng);
         }
         remaining_count--;
     };
 
+    append_and_shuffle(boundary(initial_piece, RIGHT));
+    append_and_shuffle(boundary(initial_piece, DOWN));
+    append_and_shuffle(boundary(initial_piece, LEFT));
+    append_and_shuffle(boundary(initial_piece, UP));
+
     while (remaining_count > 0) {
         bool do_continue = false;
         bb_candidates.clear();
-        // decltype to get rid of compiler warning lolz
-        for (decltype(remaining_boundaries.size()) i = 0; i < remaining_boundaries.size(); i++) {
+        for (size_t i = 0; i < remaining_boundaries.size(); i++) {
             // don't delete elements in this loop (at least for now)
             const boundary& b = remaining_boundaries[i];
             int p = b.first;
@@ -306,6 +313,8 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     delete[] parent1_loc;
     delete[] parent2_loc;
     delete[] child_loc;
+    delete[] placed;
+    delete[] tmp;
 }
 
 void reassemble(const Mat_<int>& puzzle, const Point& puzzle_start,
@@ -354,7 +363,10 @@ int main(int argc, char* argv[]) {
     auto start = chrono::steady_clock::now();
     int i, j, x, y;
     const char* infile = argc > 1 ? argv[1] : "images/pillars.jpg";
+#ifdef _OPENMP
     const int num_threads = argc > 2 ? std::stoi(argv[2]) : 1;
+    omp_set_num_threads(num_threads);
+#endif
     Mat img;
     read_img(infile, img);
     cout << "input size (cropped): " << img.size() << endl;
@@ -448,8 +460,6 @@ int main(int argc, char* argv[]) {
     get_solution(solution);
     cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
     cout << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
-
-    omp_set_num_threads(num_threads);
     start = chrono::steady_clock::now();
     for (i = 1; i <= GENERATIONS; i++) {
         cout << "generation " << i << " time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
