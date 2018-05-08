@@ -14,4 +14,4 @@ for img in images:
     os.makedirs(out_path, exist_ok=True)
     for t in threads:
         # :notlikeblob:
-        os.system('./test-omp -t {0} -o {1} | tee {2}.txt'.format(t, out_path, path.join(out_path, 't{}'.format(t))))
+        os.system('./test-omp -t {0} -o {1} {3} | tee {2}.txt'.format(t, out_path, path.join(out_path, 't{}'.format(t)), img_path))
