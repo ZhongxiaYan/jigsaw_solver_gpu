@@ -22,8 +22,7 @@ using namespace cv;
 constexpr int BLOCK_SIZE = 32;
 int NUM_PIECES, PUZZLE_HEIGHT, PUZZLE_WIDTH;
 
-random_device rd;
-mt19937_64 rng(rd());
+mt19937 rng(random_device{}());
 
 enum Direction {
     // exact order is important
@@ -361,8 +360,9 @@ int main(int argc, char* argv[]) {
     int i, j, x, y;
     const char* infile = argc > 1 ? argv[1] : "images/pillars.jpg";
 #ifdef _OPENMP
-    const int num_threads = argc > 2 ? std::stoi(argv[2]) : 1;
-    omp_set_num_threads(num_threads);
+    if (argc > 2) {
+        omp_set_num_threads(atoi(argv[2]));
+    }
 #endif
     Mat img;
     read_img(infile, img);
