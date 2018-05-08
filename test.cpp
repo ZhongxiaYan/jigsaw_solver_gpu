@@ -3,12 +3,14 @@
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+#include <unordered_set>
 #include <random>
 #include <algorithm>
 #include <chrono>
 #include <tuple>
 #include <utility>
 #include <omp.h>
+#include <boost/container/flat_set.hpp>
 
 #include <opencv2/opencv.hpp>
 
@@ -97,16 +99,15 @@ int argmin(const Mat_<float>& m1) {
     return result;
 }
 
-int argmin(const Mat_<float>& m1, const bool* placed) {
-    int i = 0;
+int argmin(const Mat_<float>& m1, const boost::container::flat_set<int> unplaced) {
     int result = -1;
     float val = HUGE_VALF;
-    for (const auto& f : m1) {
-        if (f < val && !placed[i]) {
+    for (const auto &p : unplaced) {
+        float f = m1.at<float>(p);
+        if (f < val) {
             val = f;
-            result = i;
+            result = p;
         }
-        i++;
     }
     assert(result > 0);
     return result;
@@ -151,7 +152,10 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     Point* parent1_loc = new Point[NUM_PIECES + 1];
     Point* parent2_loc = new Point[NUM_PIECES + 1];
     Point* child_loc = new Point[NUM_PIECES + 1];
-    bool* placed = new bool[NUM_PIECES + 1]();  // inits to false
+    boost::container::flat_set<int> unplaced;
+    for (int i = 1; i <= NUM_PIECES; i++) {
+        unplaced.insert(i);
+    }
     int* tmp = new int[NUM_PIECES];
     for (y = 0; y < PUZZLE_HEIGHT; y++) {
         for (x = 0; x < PUZZLE_WIDTH; x++) {
@@ -166,7 +170,7 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     min_y = max_y = PUZZLE_HEIGHT;
     bool maxed_height = false, maxed_width = false;
     int initial_piece = randint(1, NUM_PIECES);
-    placed[initial_piece] = true;
+    unplaced.erase(initial_piece);
     int remaining_count = NUM_PIECES - 1;
     child(PUZZLE_HEIGHT, PUZZLE_WIDTH) = initial_piece;
     child_loc[initial_piece] = Point(PUZZLE_WIDTH, PUZZLE_HEIGHT);
@@ -175,14 +179,8 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     vector<pair<int, Point>> bb_candidates;
 
     auto get_random_unplaced = [&]() {
-        int len = 0;
-        for (int i = 1; i <= NUM_PIECES; i++) {
-            if (!placed[i]) {
-                tmp[len++] = i;
-            }
-        }
-        assert(len == remaining_count);
-        return tmp[randint(0, len - 1)];
+        assert(unplaced.size() == remaining_count);
+        return unplaced.begin()[randint(0, remaining_count - 1)];
     };
 
     auto append_and_shuffle = [&](const boundary& b) {
@@ -197,10 +195,10 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
 
     auto add_piece = [&](int p, const Point& to) {
         assert(p > 0 && p <= NUM_PIECES);
-        assert(!placed[p]);
+        assert(unplaced.find(p) != unplaced.end());
         child(to) = p;
         child_loc[p] = to;
-        placed[p] = true;
+        unplaced.erase(p);
         min_x = min(min_x, to.x);
         max_x = max(max_x, to.x);
         min_y = min(min_y, to.y);
@@ -258,7 +256,7 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
             const Point to_p2 = parent2_loc[p] + delta[d];
             int p1 = parent1(to_p1);
             int p2 = parent2(to_p2);
-            if (p1 && p1 == p2 && !placed[p1]) {
+            if (p1 && p1 == p2 && (unplaced.find(p1) != unplaced.end())) {
                 if (remaining_count > 1 && randint(0, MUTATION_RATE_MAX - 1) < MUTATION_RATE) {
                     p1 = get_random_unplaced();
                 }
@@ -268,10 +266,10 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
             } else {
                 int bb = bb_by_dir[d][p];
                 if (bb) {
-                    if (p1 == bb && !placed[p1]) {
+                    if (p1 == bb && (unplaced.find(p1) != unplaced.end())) {
                         bb_candidates.push_back(make_pair(p1, to));
                     }
-                    if (p2 == bb && !placed[p2]) {
+                    if (p2 == bb && (unplaced.find(p2) != unplaced.end())) {
                         bb_candidates.push_back(make_pair(p2, to));
                     }
                 }
@@ -296,13 +294,13 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
         ////
         int p_new = 0;
         if (d == RIGHT) {
-            p_new = argmin(right_dissimilarity.row(p), placed);
+            p_new = argmin(right_dissimilarity.row(p), unplaced);
         } else if (d == DOWN) {
-            p_new = argmin(down_dissimilarity.row(p), placed);
+            p_new = argmin(down_dissimilarity.row(p), unplaced);
         } else if (d == LEFT) {
-            p_new = argmin(right_dissimilarity.col(p), placed);
+            p_new = argmin(right_dissimilarity.col(p), unplaced);
         } else if (d == UP) {
-            p_new = argmin(down_dissimilarity.col(p), placed);
+            p_new = argmin(down_dissimilarity.col(p), unplaced);
         }
         if (remaining_count > 1 && randint(0, MUTATION_RATE_MAX - 1) < MUTATION_RATE) {
             p_new = get_random_unplaced();
@@ -313,7 +311,6 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     delete[] parent1_loc;
     delete[] parent2_loc;
     delete[] child_loc;
-    delete[] placed;
     delete[] tmp;
 }
 
