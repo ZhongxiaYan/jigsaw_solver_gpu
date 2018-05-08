@@ -3,18 +3,17 @@
 #include <cstdlib>
 #include <iostream>
 #include <vector>
-#include <unordered_set>
 #include <random>
 #include <algorithm>
 #include <chrono>
 #include <tuple>
 #include <utility>
 #include <omp.h>
+#include <sys/stat.h>
+
 #include <boost/container/flat_set.hpp>
-
+#include <boost/program_options.hpp>
 #include <opencv2/opencv.hpp>
-
-// TODO: benchmark
 
 using namespace std;
 using namespace cv;
@@ -98,10 +97,10 @@ int argmin(const Mat_<float>& m1) {
     return result;
 }
 
-int argmin(const Mat_<float>& m1, const boost::container::flat_set<int> unplaced) {
+int argmin(const Mat_<float>& m1, const boost::container::flat_set<int>& unplaced) {
     int result = -1;
     float val = HUGE_VALF;
-    for (const auto &p : unplaced) {
+    for (const auto& p : unplaced) {
         float f = m1.at<float>(p);
         if (f < val) {
             val = f;
@@ -330,7 +329,8 @@ void reassemble(const Mat_<int>& puzzle, const Point& puzzle_start,
     }
 }
 
-void read_img(const string& path, Mat& result) {
+void read_img(const string& path, Mat& result) {\
+    cout << "reading image from " << path << endl;
     Mat img_bgr_u8 = imread(path);
     if (img_bgr_u8.empty()) {
         cerr << "unable to read input file" << endl;
@@ -357,15 +357,51 @@ void write_img(const string& path, const Mat& img) {
 
 int main(int argc, char* argv[]) {
     auto start = chrono::steady_clock::now();
-    int i, j, x, y;
-    const char* infile = argc > 1 ? argv[1] : "images/pillars.jpg";
+
+    boost::program_options::options_description desc;
+    desc.add_options()
+        ("help,h", "show help")
 #ifdef _OPENMP
-    if (argc > 2) {
-        omp_set_num_threads(atoi(argv[2]));
+        ("threads,t", boost::program_options::value<int>()->default_value(0), "number of threads (0 for auto)")
+#endif
+        ("generations,g", boost::program_options::value<int>()->default_value(100), "number of generations")
+        ("population,p", boost::program_options::value<int>()->default_value(1000), "population size")
+        ("out,o", boost::program_options::value<string>()->default_value("."), "output directory")
+        ("in,i", boost::program_options::value<string>()->default_value("images/pillars.jpg"), "input image")
+        ;
+    boost::program_options::variables_map vm;
+    boost::program_options::positional_options_description p_desc;
+    p_desc.add("in", -1);
+    boost::program_options::store(boost::program_options::command_line_parser(argc, argv).options(desc).positional(p_desc).run(), vm);
+    boost::program_options::notify(vm);
+
+    if (vm.count("help") > 0) {
+        cerr << desc << endl;
+        cerr << "note: --in/-i not needed before input filename" << endl;
+        return 1;
+    }
+
+#ifdef _OPENMP
+    int threads = vm["threads"].as<int>();
+    if (threads > 0) {
+        cout << "using " << threads << " threads" << endl;
+        omp_set_num_threads(threads);
+    } else {
+        cout << "using default threads" << endl;
     }
 #endif
+    const int generations = vm["generations"].as<int>();
+    const int population_size = vm["population"].as<int>();;
+    constexpr int NUM_ELITE = 4;
+    const int to_add = population_size - NUM_ELITE;
+    const string outdir = vm["out"].as<string>();
+    mkdir(outdir.c_str(), 0777);
+    cout << "generations: " << generations << ", population size: " << population_size << endl;
+
+    int i, j, x, y;
     Mat img;
-    read_img(infile, img);
+
+    read_img(vm["in"].as<string>(), img);
     cout << "input size (cropped): " << img.size() << endl;
     // cout << format(img.at<Vec3f>(0, 0), Formatter::FMT_PYTHON) << endl;
     PUZZLE_HEIGHT = img.rows / BLOCK_SIZE;
@@ -427,14 +463,6 @@ int main(int argc, char* argv[]) {
     bb_by_dir[LEFT] = bb_left;
     bb_by_dir[UP] = bb_up;
 
-#ifndef DEMO
-    constexpr int POPULATION_SIZE = 1000;
-#else
-    constexpr int POPULATION_SIZE = 100;
-#endif
-    constexpr int GENERATIONS = 100;
-    constexpr int NUM_ELITE = 4;
-
     Mat_<int> parent;
     Mat_<int> child;
     Point child_start;
@@ -447,7 +475,7 @@ int main(int argc, char* argv[]) {
         return get<2>(a) < get<2>(b);
     };
 
-    for (i = 0; i < POPULATION_SIZE; i++) {
+    for (i = 0; i < population_size; i++) {
         get_random_parent(parent);
         population.push_back(make_tuple(parent.clone(), Point(1, 1),
                              dissimilarity(parent, Point(1, 1), right_dissimilarity, down_dissimilarity)));
@@ -458,17 +486,15 @@ int main(int argc, char* argv[]) {
     cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
     cout << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
     start = chrono::steady_clock::now();
-    for (i = 1; i <= GENERATIONS; i++) {
-        cout << "generation " << i << " time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+    for (i = 1; i <= generations; i++) {
         nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
         new_population.assign(population.begin(), population.begin() + NUM_ELITE);
-        constexpr int to_add = POPULATION_SIZE - NUM_ELITE;
         #pragma omp parallel for private(child, child_start)
         for (j = 0; j < to_add; j++) {
-            int idx1 = randint(0, POPULATION_SIZE - 1);
+            int idx1 = randint(0, population_size - 1);
             int idx2;
             do {
-                idx2 = randint(0, POPULATION_SIZE - 1);
+                idx2 = randint(0, population_size - 1);
             } while (idx1 == idx2);
             const auto& pop1 = population[idx1];
             const auto& pop2 = population[idx2];
@@ -481,14 +507,15 @@ int main(int argc, char* argv[]) {
                                          dissimilarity(child, child_start, right_dissimilarity, down_dissimilarity)));
             }
         }
-        assert(new_population.size() == POPULATION_SIZE);
+        assert(new_population.size() == population_size);
         population = move(new_population);
-        // using tie(child, child_start, ...) leads to weird bugs here
+        cout << "finished generation " << i << "; time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
         const auto& best = *min_element(population.begin(), population.end(), cmp);
+        // using std::tie(child, child_start, ...) leads to weird bugs here
         cout << "best loss: " << get<2>(best) << endl;
         reassemble(get<0>(best), get<1>(best), pieces, assembled_result);
         // cout << format(child, Formatter::FMT_PYTHON) << endl;
-        write_img("out" + to_string(i) + ".png", assembled_result);
+        write_img(outdir + "/out" + to_string(i) + ".png", assembled_result);
     }
     // don't bother freeing stuff allocated in main
     return 0;
