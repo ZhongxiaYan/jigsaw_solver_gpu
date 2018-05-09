@@ -531,16 +531,27 @@ int main(int argc, char* argv[]) {
             Point &start = get<1>(population.at(k));
             cv::Rect non_null = cv::Rect(start.x - 1, start.y - 1, PUZZLE_WIDTH + 2, PUZZLE_HEIGHT + 2);
             assert(get<0>(population.at(k))(non_null).clone().total() == NUM_PUZZLE_INT);
-            memcpy(best_self_pops + k * NUM_PUZZLE_INT, get<0>(population.at(k))(non_null).clone().data, NUM_PUZZLE_INT * sizeof(int));
+            memcpy(&best_self_pops[k * NUM_PUZZLE_INT], get<0>(population.at(k))(non_null).clone().data, NUM_PUZZLE_INT * sizeof(int));
         }
         MPI_Sendrecv(best_self_pops, self_counter * NUM_PUZZLE_INT, MPI_INT, 1 - rank, 0,
                     best_other_pops, other_counter * NUM_PUZZLE_INT, MPI_INT, 1 - rank, MPI_ANY_TAG, MPI_COMM_WORLD, NULL);        
 
         new_population.assign(population.begin(), population.begin() + self_counter);
         for (int k = 0; k < other_counter; k++) {
+            auto state = Mat_<int>(PUZZLE_WIDTH + 2, PUZZLE_HEIGHT + 2, &best_other_pops[k * NUM_PUZZLE_INT]);
+            for (int s_i = 0; s_i < PUZZLE_WIDTH + 2; s_i++) {
+                for (int s_j = 0; s_j < PUZZLE_HEIGHT + 2; s_j++) {
+                    if (s_i == 0 || s_j == 0 || s_i == PUZZLE_WIDTH + 1 || s_j == PUZZLE_HEIGHT + 1) {
+                        assert(state(Point(s_i, s_j)) == 0);
+                    } else {
+                        assert(state(Point(s_i, s_j)) > 0);
+                        assert(state(Point(s_i, s_j)) <= NUM_PIECES);
+                    }
+                }
+            }
             population.push_back(
                 make_tuple(
-                    Mat_<int>(PUZZLE_WIDTH + 2, PUZZLE_HEIGHT + 2, &best_other_pops[k * NUM_PUZZLE_INT]),
+                    state,
                     Point(1, 1),
                     best_other[k]
                 )
