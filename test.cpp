@@ -422,7 +422,8 @@ int main(int argc, char* argv[]) {
     cout << "precomputing pairwise dissimilarities" << endl;
     Mat_<float> right_dissimilarity(NUM_PIECES + 1, NUM_PIECES + 1);
     Mat_<float> down_dissimilarity(NUM_PIECES + 1, NUM_PIECES + 1);
-    // TODO: CUDA this?
+
+    #pragma omp parallel for private(j)
     for (i = 0; i <= NUM_PIECES; i++) {
         for (j = 0; j <= NUM_PIECES; j++) {
             if (i == 0 || j == 0 || i == j) {
@@ -484,7 +485,7 @@ int main(int argc, char* argv[]) {
     Mat_<int> solution;
     get_solution(solution);
     cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
-    cout << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+    cout << "initialization time: " << chrono::duration<double, milli>(chrono::steady_clock::now() - start).count() << " ms" << endl;
     start = chrono::steady_clock::now();
     for (i = 1; i <= generations; i++) {
         nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
@@ -509,7 +510,7 @@ int main(int argc, char* argv[]) {
         }
         assert(new_population.size() == population_size);
         population = move(new_population);
-        cout << "finished generation " << i << "; time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+        cout << "finished generation " << i << "; time=" << chrono::duration<double, milli>(chrono::steady_clock::now() - start).count() << " ms" << endl;
         const auto& best = *min_element(population.begin(), population.end(), cmp);
         // using std::tie(child, child_start, ...) leads to weird bugs here
         cout << "best loss: " << get<2>(best) << endl;
