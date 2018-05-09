@@ -172,7 +172,7 @@ void crossover(const Mat_<int>& parent1, const Mat_<int>& parent2, Mat_<int>& ch
     bool maxed_height = false, maxed_width = false;
     int initial_piece = randint(1, NUM_PIECES);
     unplaced.erase(initial_piece);
-    int remaining_count = NUM_PIECES - 1;
+    unsigned int remaining_count = NUM_PIECES - 1;
     child(PUZZLE_HEIGHT, PUZZLE_WIDTH) = initial_piece;
     child_loc[initial_piece] = Point(PUZZLE_WIDTH, PUZZLE_HEIGHT);
 
@@ -392,7 +392,7 @@ int main(int argc, char* argv[]) {
 
     int i_proc = 0;
     int threads;
-    int population_size;
+    unsigned int population_size;
     while (threads_s >> threads && populations_s >> population_size) {
         if (i_proc == rank) break;
         threads_s.ignore();
@@ -401,28 +401,28 @@ int main(int argc, char* argv[]) {
     }
 
     if (threads > 0) {
-        cout << "using " << threads << " threads" << endl;
+        cout << "process " << rank << " " << "using " << threads << " threads" << endl;
         omp_set_num_threads(threads);
     } else {
-        cout << "using default threads" << endl;
+        cout << "process " << rank << " " << "using default threads" << endl;
     }
     constexpr int NUM_ELITE = 4;
     const int to_add = population_size - NUM_ELITE;
     const string outdir = vm["out"].as<string>();
     mkdir(outdir.c_str(), 0777);
-    cout << "generations: " << generations << ", population size: " << population_size << endl;
+    cout << "process " << rank << " " << "generations: " << generations << ", population size: " << population_size << endl;
 
     int i, j, x, y;
     Mat img;
 
     read_img(vm["in"].as<string>(), img);
-    cout << "input size (cropped): " << img.size() << endl;
-    // cout << format(img.at<Vec3f>(0, 0), Formatter::FMT_PYTHON) << endl;
+    cout << "process " << rank << " " << "input size (cropped): " << img.size() << endl;
+    // cout << "process " << rank << " " << format(img.at<Vec3f>(0, 0), Formatter::FMT_PYTHON) << endl;
     PUZZLE_HEIGHT = img.rows / BLOCK_SIZE;
     PUZZLE_WIDTH = img.cols / BLOCK_SIZE;
     NUM_PIECES = PUZZLE_HEIGHT * PUZZLE_WIDTH;
     assert(PUZZLE_HEIGHT > 1 && PUZZLE_WIDTH > 1);
-    cout << NUM_PIECES << " pieces" << endl;
+    cout << "process " << rank << " " << NUM_PIECES << " pieces" << endl;
 
     // 1-indexed
     Mat* pieces = new Mat[NUM_PIECES + 1];
@@ -433,7 +433,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    cout << "precomputing pairwise dissimilarities" << endl;
+    cout << "process " << rank << " " << "precomputing pairwise dissimilarities" << endl;
     Mat_<float> right_dissimilarity(NUM_PIECES + 1, NUM_PIECES + 1);
     Mat_<float> down_dissimilarity(NUM_PIECES + 1, NUM_PIECES + 1);
     // TODO: CUDA this?
@@ -449,7 +449,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    cout << "precomputing best buddies" << endl;
+    cout << "process " << rank << " " << "precomputing best buddies" << endl;
     int* best_left = new int[NUM_PIECES + 1];
     int* best_right = new int[NUM_PIECES + 1];
     int* best_up = new int[NUM_PIECES + 1];
@@ -482,14 +482,14 @@ int main(int argc, char* argv[]) {
     Point child_start;
     Mat assembled_result;
 
-    cout << "creating initial population" << endl;
+    cout << "process " << rank << " " << "creating initial population" << endl;
     vector<tuple<Mat_<int>, Point, float>> population;
     vector<tuple<Mat_<int>, Point, float>> new_population;
     auto cmp = [](const auto& a, const auto& b) {
         return get<2>(a) < get<2>(b);
     };
 
-    for (i = 0; i < population_size; i++) {
+    for (unsigned int k = 0; k < population_size; k++) {
         get_random_parent(parent);
         population.push_back(make_tuple(parent.clone(), Point(1, 1),
                              dissimilarity(parent, Point(1, 1), right_dissimilarity, down_dissimilarity)));
@@ -497,18 +497,66 @@ int main(int argc, char* argv[]) {
 
     Mat_<int> solution;
     get_solution(solution);
-    cout << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
-    cout << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+    cout << "process " << rank << " " << "solution loss: " << dissimilarity(solution, Point(1, 1), right_dissimilarity, down_dissimilarity) << endl;
+    cout << "process " << rank << " " << "initialization time: " << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+    float best_self[NUM_ELITE];
+    float best_other[NUM_ELITE];
+    const size_t NUM_PUZZLE_INT = (PUZZLE_HEIGHT + 2) * (PUZZLE_WIDTH + 2);
+    int *best_self_pops = new int[NUM_ELITE * NUM_PUZZLE_INT];
+    int *best_other_pops = new int[NUM_ELITE * NUM_PUZZLE_INT];
+
     start = chrono::steady_clock::now();
     for (i = 1; i <= generations; i++) {
         nth_element(population.begin(), population.begin() + NUM_ELITE, population.end(), cmp);
-        new_population.assign(population.begin(), population.begin() + NUM_ELITE);
+        sort(population.begin(), population.begin() + NUM_ELITE, cmp);
+        for (int k = 0; k < NUM_ELITE; k++) {
+            best_self[k] = get<2>(population.at(k));
+        }
+        MPI_Sendrecv(best_self, NUM_ELITE, MPI_FLOAT, 1 - rank, 0,
+                    best_other, NUM_ELITE, MPI_FLOAT, 1 - rank, MPI_ANY_TAG, MPI_COMM_WORLD, NULL);
+
+        int self_counter = 0;
+        int other_counter = 0;
+        while (self_counter + other_counter < NUM_ELITE) {
+            if (best_self[self_counter] < best_other[other_counter]) {
+                self_counter++;
+            } else if (best_self[self_counter] > best_other[other_counter]) {
+                other_counter++;
+            } else {
+                self_counter += (rank == 0);
+                other_counter += (rank != 0);
+            }
+        }
+        for (int k = 0; k < self_counter; k++) {
+            Point &start = get<1>(population.at(k));
+            cv::Rect non_null = cv::Rect(start.x - 1, start.y - 1, PUZZLE_WIDTH + 2, PUZZLE_HEIGHT + 2);
+            assert(get<0>(population.at(k))(non_null).clone().total() == NUM_PUZZLE_INT);
+            memcpy(best_self_pops + k * NUM_PUZZLE_INT, get<0>(population.at(k))(non_null).clone().data, NUM_PUZZLE_INT * sizeof(int));
+        }
+        MPI_Sendrecv(best_self_pops, self_counter * NUM_PUZZLE_INT, MPI_INT, 1 - rank, 0,
+                    best_other_pops, other_counter * NUM_PUZZLE_INT, MPI_INT, 1 - rank, MPI_ANY_TAG, MPI_COMM_WORLD, NULL);        
+
+        new_population.assign(population.begin(), population.begin() + self_counter);
+        for (int k = 0; k < other_counter; k++) {
+            population.push_back(
+                make_tuple(
+                    Mat_<int>(PUZZLE_WIDTH + 2, PUZZLE_HEIGHT + 2, &best_other_pops[k * NUM_PUZZLE_INT]),
+                    Point(1, 1),
+                    best_other[k]
+                )
+            );
+        }
+        new_population.insert(new_population.end(), population.end() - other_counter, population.end());
+
+        assert(new_population.size() == NUM_ELITE);
+        const int old_pop_size = population.size();
+
         #pragma omp parallel for private(child, child_start)
         for (j = 0; j < to_add; j++) {
-            int idx1 = randint(0, population_size - 1);
+            int idx1 = randint(0, old_pop_size - 1);
             int idx2;
             do {
-                idx2 = randint(0, population_size - 1);
+                idx2 = randint(0, old_pop_size - 1);
             } while (idx1 == idx2);
             const auto& pop1 = population[idx1];
             const auto& pop2 = population[idx2];
@@ -523,13 +571,16 @@ int main(int argc, char* argv[]) {
         }
         assert(new_population.size() == population_size);
         population = move(new_population);
-        cout << "finished generation " << i << "; time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
+        cout << "process " << rank << " " << "finished generation " << i << "; time=" << chrono::duration <double, milli> (chrono::steady_clock::now() - start).count() << " ms" << endl;
         const auto& best = *min_element(population.begin(), population.end(), cmp);
         // using std::tie(child, child_start, ...) leads to weird bugs here
-        cout << "best loss: " << get<2>(best) << endl;
-        reassemble(get<0>(best), get<1>(best), pieces, assembled_result);
-        // cout << format(child, Formatter::FMT_PYTHON) << endl;
-        write_img(outdir + "/out" + to_string(i) + ".png", assembled_result);
+        cout << "process " << rank << " " << "best loss: " << get<2>(best) << endl;
+
+        if (rank == 0) {
+            reassemble(get<0>(best), get<1>(best), pieces, assembled_result);
+            // cout << format(child, Formatter::FMT_PYTHON) << endl;
+            write_img(outdir + "/out" + to_string(i) + ".png", assembled_result);
+        }
     }
     // don't bother freeing stuff allocated in main
     return 0;
